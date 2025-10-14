@@ -148,7 +148,7 @@ export class S3 {
 	): Promise<Buffer<ArrayBufferLike> | null> {
 		const headers: Record<string, string> = {};
 		if (etag) {
-			headers["If-None-Match"] = JSON.stringify(etag);
+			headers["If-None-Match"] = etag;
 		}
 		const { content } = await this.#request(
 			"GET",
