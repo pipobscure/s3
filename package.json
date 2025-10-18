@@ -1,6 +1,6 @@
 {
 	"name": "@pipobscure/s3",
-	"version": "2.0.0",
+	"version": "2.0.1",
 	"description": "Simple AWS S3 Library",
 	"type": "module",
 	"export": "./dist/s3.js",
