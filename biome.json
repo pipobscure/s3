@@ -17,8 +17,12 @@
 		"enabled": true,
 		"rules": {
 			"recommended": true,
+			"complexity": {
+				"noCommaOperator": "off"
+			},
 			"suspicious": {
-				"noExplicitAny": "off"
+				"noExplicitAny": "off",
+				"noAssignInExpressions": "off"
 			}
 		}
 	},

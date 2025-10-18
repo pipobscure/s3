@@ -1,6 +1,7 @@
 import * as CRYPTO from 'node:crypto';
 import * as XML from 'xml-js';
 
+export const MIN_CHUNK_SIZE = 5242880; // 5MB
 export type S3Options = {
 	key: string;
 	secret: string;
@@ -11,9 +12,24 @@ export type S3Options = {
 export type S3Method = 'GET' | 'PUT' | 'DELETE' | 'HEAD' | 'POST';
 
 export type AWSProperty = 'If-Match' | 'Content-Type';
-export type AWSProperties = Record<AWSProperty, string>;
-const AWSParams = ['acl', 'lifecycle', 'location', 'logging', 'notification', 'partNumber', 'policy', 'requestPayment', 'uploadId', 'uploads', 'versionId', 'versioning', 'versions', 'website'];
-export type UploadPart = {
+export type AWShdrs = Record<AWSProperty, string>;
+const AWSParams = [
+	'acl',
+	'lifecycle',
+	'location',
+	'logging',
+	'notification',
+	'partNumber',
+	'policy',
+	'requestPayment',
+	'uploadId',
+	'uploads',
+	'versionId',
+	'versioning',
+	'versions',
+	'website',
+];
+type UploadPart = {
 	number: number;
 	etag: string;
 	sha1?: string;
@@ -53,7 +69,7 @@ export class S3 {
 		sendbody?: Buffer,
 	) {
 		const date = new Date();
-		let resource = (`${this.#hostBased ? `/${this.#bucket}` : ''}${url.pathname}`);
+		let resource = `${this.#hostBased ? `/${this.#bucket}` : ''}${url.pathname}`;
 		let first = true;
 		for (const [key, val] of url.searchParams) {
 			if (!AWSParams.includes(key)) continue;
@@ -86,12 +102,15 @@ export class S3 {
 			body,
 		} as any as RequestInit);
 
+		const bytes = (await response.bytes()) ?? null;
 		if (!response.ok) {
-			throw new Error(
-				`HTTP(${response.status}) ${response.statusText} [${method} ${url}]`,
+			throw Object.assign(
+				new Error(
+					`HTTP(${response.status}) ${response.statusText} [${method} ${url}]`,
+				),
+				{ text: bytes ? Buffer.from(bytes).toString('utf-8') : undefined },
 			);
 		}
-		const bytes = (await response.bytes()) ?? null;
 		const content = bytes ? Buffer.from(bytes) : null;
 		const headers = response.headers;
 		return { headers, content };
@@ -117,25 +136,37 @@ export class S3 {
 	}
 	async put(
 		resource: string,
-		content: Buffer<ArrayBufferLike> | string | any,
-		properties: Partial<AWSProperties & { type: string }> = {},
+		content:
+			| AsyncIterable<Buffer<ArrayBufferLike>>
+			| Buffer<ArrayBufferLike>
+			| string
+			| object,
+		hdrs: Partial<AWShdrs> = {},
 	) {
-		let { type, ...hdrs } = properties;
+		if ((content as any)[Symbol.asyncIterator])
+			return await this.#putStream(
+				resource,
+				content as AsyncIterable<Buffer<ArrayBufferLike>>,
+				hdrs,
+			);
 		if ('string' === typeof content) {
 			content = Buffer.from(content, 'utf-8');
-			type = type ?? 'text/plain; charset=utf-8';
+			hdrs['Content-Type'] =
+				hdrs['Content-Type'] ?? 'text/plain; charset=utf-8';
 		}
 		if (!Buffer.isBuffer(content)) {
 			content = Buffer.from(JSON.stringify(content), 'utf-8');
-			type = type ?? 'application/json; charset=utf-8';
+			hdrs['Content-Type'] =
+				hdrs['Content-Type'] ?? 'application/json; charset=utf-8';
 		}
+		hdrs['Content-Type'] = hdrs['Content-Type'] ?? 'application/octet-stream';
 		const { headers } = await this.#request(
 			'PUT',
 			this.#url(resource),
-			Object.assign(hdrs, { type: type ?? 'application/octet-stream' }),
-			content,
+			hdrs,
+			content as Buffer<ArrayBufferLike>,
 		);
-		return headers;
+		return JSON.parse(headers.get('etag') as string);
 	}
 	async del(resource: string) {
 		const hdrs: Record<string, string> = {};
@@ -149,8 +180,11 @@ export class S3 {
 	async #list(
 		prefix?: string,
 		options?: Record<string, string>,
-		continuation?: string
-	): Promise<{ continuation?: string, items: { name: string; size: number; modified: number }[] }> {
+		continuation?: string,
+	): Promise<{
+		continuation?: string;
+		items: { name: string; size: number; modified: number }[];
+	}> {
 		const url = this.#url('/');
 		if (options) {
 			for (const [key, val] of Object.entries(options)) {
@@ -188,8 +222,8 @@ export class S3 {
 					item?.LastModified?.[0]?._text?.join('') ?? new Date().toISOString();
 				const size = +(item?.Size?.[0]?._text?.join('') ?? 0);
 				return { name, size, modified };
-			})
-		}
+			}),
+		};
 	}
 	async *list(prefix?: string, options?: Record<string, string>) {
 		prefix = prefix
@@ -205,42 +239,161 @@ export class S3 {
 			yield* items;
 		} while (continuation);
 	}
-	async copy(
-		resource: string,
-		source: string,
-		properties?: Partial<AWSProperties>,
-	) {
-		const result = await this.#request(
-			'PUT',
-			this.#url(resource),
-			Object.assign(
-				{
-					'x-amz-copy-source': source,
-				},
-				properties ?? {},
-			),
+	async copy(source: string, target: string, hdrs: Partial<AWShdrs> = {}) {
+		source = [this.#bucket, ...source.split(/\/+/)]
+			.filter((x) => (x = x.trim()))
+			.join('/');
+		const { content } = await this.#request('PUT', this.#url(target), {
+			...hdrs,
+			'x-amz-copy-source': source,
+		});
+		if (!content) throw new Error('missing response');
+		const response = XML.xml2js(content.toString('utf-8'), {
+			compact: true,
+			trim: true,
+			ignoreDeclaration: true,
+			ignoreInstruction: true,
+			ignoreAttributes: true,
+			ignoreComment: true,
+			alwaysArray: true,
+		}) as any;
+		const etag = response?.CopyObjectResult?.[0]?.ETag?.[0]?._text?.[0];
+		return JSON.parse(etag ?? '""');
+	}
+	async #startMultipart(resource: string, headers: Partial<AWShdrs> = {}) {
+		const url = this.#url(resource);
+		url.search = 'uploads';
+		const { content } = await this.#request(
+			'POST',
+			url,
+			headers,
+			Buffer.alloc(0),
 		);
-		if (result.content?.length) {
-			return Object.assign(
-				XML.xml2json(result.content.toString('utf-8')),
-				result.headers,
-			);
-		} else {
-			return result.headers;
+		if (!content?.length) {
+			throw new Error(`failed to start multi-part upload for ${resource}`);
 		}
+		const data = XML.xml2js(content.toString('utf-8'), {
+			compact: true,
+			trim: true,
+			ignoreDeclaration: true,
+			ignoreInstruction: true,
+			ignoreAttributes: true,
+			ignoreComment: true,
+			alwaysArray: true,
+		}) as any;
+		const uploadId =
+			data.InitiateMultipartUploadResult?.[0]?.UploadId?.[0]?._text?.[0];
+		return uploadId;
+	}
+	async #uploadPart(
+		resource: string,
+		uploadId: string,
+		num: number,
+		content: Buffer<ArrayBufferLike>,
+		hdrs: Partial<AWShdrs> = {},
+	) {
+		const url = this.#url(resource);
+		url.searchParams.set('partNumber', `${num}`);
+		url.searchParams.set('uploadId', uploadId);
+		const { headers } = await this.#request('PUT', url, hdrs, content);
+		return JSON.parse(headers.get('etag') as string);
+	}
+	async #commitMultipart(
+		resource: string,
+		uploadId: string,
+		parts: Iterable<UploadPart>,
+		hdrs: Partial<AWShdrs> = {},
+	) {
+		const url = this.#url(resource);
+		url.searchParams.set('uploadId', uploadId);
+		const data = Buffer.from(Array.from(partsXML(parts)).join('\n'));
+		const { content } = await this.#request(
+			'POST',
+			url,
+			{ ...hdrs, 'Content-Type': 'application/xml; charset=UTF-8' },
+			data,
+		);
+		if (!content) throw new Error('missing response');
+		const response = XML.xml2js(content.toString('utf-8'), {
+			compact: true,
+			trim: true,
+			ignoreDeclaration: true,
+			ignoreInstruction: true,
+			ignoreAttributes: true,
+			ignoreComment: true,
+			alwaysArray: true,
+		}) as any;
+		const etag =
+			response?.CompleteMultipartUploadResult?.[0]?.ETag?.[0]?._text?.[0];
+		return etag;
+	}
+	async #abortMultipart(resource: string, uploadId: string) {
+		const url = this.#url(resource);
+		url.searchParams.set('uploadId', uploadId);
+		const { headers } = await this.#request('DELETE', url, {});
+		return headers;
+	}
+	async #putStream(
+		name: string,
+		content: AsyncIterable<Buffer<ArrayBufferLike>>,
+		hdrs: Partial<AWShdrs> = {},
+	): Promise<string> {
+		const store: Buffer<ArrayBufferLike>[] = [];
+		let length = 0;
+		let uploadId: string | null = null;
+		const parts: UploadPart[] = [];
+		try {
+			for await (const chunk of content) {
+				store.push(chunk);
+				length += chunk.length;
+				if (length > MIN_CHUNK_SIZE) {
+					uploadId = uploadId ?? ((await this.#startMultipart(name)) as string);
+					const content = Buffer.concat(store.splice(0, store.length), length);
+					length = 0;
+					const number = parts.length + 1;
+					const etag = await this.#uploadPart(
+						name,
+						uploadId as string,
+						number,
+						content,
+					);
+					parts.push({ etag, number });
+				}
+			}
+			if (uploadId) {
+				if (length) {
+					const content = Buffer.concat(store, length);
+					const number = parts.length + 1;
+					const etag = await this.#uploadPart(name, uploadId, number, content);
+					parts.push({ etag, number });
+				}
+				const etag = await this.#commitMultipart(name, uploadId, parts, hdrs);
+				return etag;
+			}
+		} catch (err) {
+			try {
+				if (uploadId) {
+					await this.#abortMultipart(name, uploadId);
+				}
+			} catch (suberr) {
+				throw new AggregateError([err, suberr], (err as Error).message);
+			}
+			throw err;
+		}
+		const data = Buffer.concat(store, length);
+		return await this.put(name, data, hdrs);
 	}
 }
 export default S3;
 
 function canonicalizeHeaders(headers: Record<string, string>) {
-	const result: [string, string][] = [];
+	const result: string[] = [];
 	for (let [key, val] of Object.entries(headers)) {
 		key = key.toLowerCase();
 		if (!key.startsWith('x-amz') || key === 'x-amz-date') continue;
-		result.push([key, val]);
+		result.push(`${key}:${val}`);
 	}
-	result.sort((a, b) => (a[0] > b[0] ? 1 : -1));
-	return result.map((...args) => args.join(':'));
+	return result.sort();
 }
 function sign(
 	secret: string,
@@ -255,4 +408,22 @@ function sign(
 	return CRYPTO.createHmac('sha1', secret)
 		.update(Buffer.from(message, 'utf-8'))
 		.digest('base64');
+}
+
+function* partXML(part: UploadPart) {
+	yield '<Part>';
+	if (part.sha1) yield `\t<ChecksumSHA1>${part.sha1}</ChecksumSHA1>`;
+	if (part.sha256) yield `\t<ChecksumSHA256>${part.sha256}</ChecksumSHA256>`;
+	yield `\t<ETag>${part.etag}</ETag>`;
+	yield `\t<PartNumber>${part.number}</PartNumber>`;
+	yield '</Part>';
+}
+function* partsXML(parts: Iterable<UploadPart>) {
+	yield '<?xml version="1.0" encoding="UTF-8"?>';
+	yield '<CompleteMultipartUpload xmlns="http://s3.amazonaws.com/doc/2006-03-01/">';
+	for (const part of parts) {
+		for (const line of partXML(part)) yield `\t${line}`;
+	}
+	yield '</CompleteMultipartUpload>';
+	yield '';
 }

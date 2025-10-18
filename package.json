@@ -14,8 +14,8 @@
 	],
 	"scripts": {
 		"test": "node --test src/*.test.ts",
-		"format": "biome format --write src/**/*.ts package.json tsconfig.json",
-		"lint": "biome lint --write src/**/*.ts package.json tsconfig.json",
+		"format": "biome format --write src/*.ts *.json",
+		"lint": "biome lint --write src/*.ts *.json",
 		"build": "tsc --build",
 		"watch": "tsc --watch",
 		"postversion": "git push --follow-tags"
