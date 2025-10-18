@@ -256,21 +256,3 @@ function sign(
 		.update(Buffer.from(message, 'utf-8'))
 		.digest('base64');
 }
-
-function* partXML(part: UploadPart) {
-	yield '<Part>';
-	if (part.sha1) yield `\t<ChecksumSHA1>${part.sha1}</ChecksumSHA1>`;
-	if (part.sha256) yield `\t<ChecksumSHA256>${part.sha256}</ChecksumSHA256>`;
-	yield `\t<ETag>${part.etag}</ETag>`;
-	yield `\t<PartNumber>${part.number}</PartNumber>`;
-	yield '</Part>';
-}
-function* partsXML(parts: Iterable<UploadPart>) {
-	yield '<?xml version="1.0" encoding="UTF-8"?>';
-	yield '<CompleteMultipartUpload xmlns="http://s3.amazonaws.com/doc/2006-03-01/">';
-	for (const part of parts) {
-		for (const line of partXML(part)) yield `\t${line}`;
-	}
-	yield '</CompleteMultipartUpload>';
-	yield '';
-}
