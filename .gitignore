@@ -9,3 +9,4 @@ temp/
 
 *.log
 logging.json
+bucket.json

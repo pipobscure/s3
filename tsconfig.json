@@ -1,10 +1,10 @@
 {
 	"compilerOptions": {
 		"target": "ESNext",
-		"module": "CommonJS",
+		"module": "nodenext",
 		"declaration": true,
 		"declarationMap": false,
-		"sourceMap": true,
+		"sourceMap": false,
 		"composite": false,
 		"incremental": true,
 		"strict": true,
@@ -13,6 +13,10 @@
 		"strictFunctionTypes": true,
 		"strictBindCallApply": true,
 		"strictPropertyInitialization": true,
+		"allowSyntheticDefaultImports": true,
+		"rewriteRelativeImportExtensions": true,
+		"erasableSyntaxOnly": true,
+		"verbatimModuleSyntax": true,
 		"noImplicitThis": true,
 		"alwaysStrict": true,
 		"noUnusedParameters": true,

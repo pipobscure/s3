@@ -2,15 +2,18 @@
 	"name": "@pipobscure/s3",
 	"version": "1.0.1",
 	"description": "Simple AWS S3 Library",
-	"main": "dist/s3.js",
+	"type": "module",
+	"export": "./dist/s3.js",
 	"files": [
 		"README.md",
 		"package.json",
 		"dist/*.js",
-		"dist/*.d.ts"
+		"dist/*.d.ts",
+		"!dist/*.test.js",
+		"!dist/*.test.d.ts"
 	],
 	"scripts": {
-		"test": "echo 'no tests yet'",
+		"test": "node --test src/*.test.ts",
 		"format": "biome format --write src/**/*.ts package.json tsconfig.json",
 		"lint": "biome lint --write src/**/*.ts package.json tsconfig.json",
 		"build": "tsc --build",
@@ -28,7 +31,7 @@
 	"contributors": [],
 	"license": "ISC",
 	"devDependencies": {
-		"@biomejs/biome": "~2.2.6",
+		"@biomejs/biome": "^2.2.6",
 		"@types/node": "~24.7.2",
 		"typescript": "~5.9.3"
 	},

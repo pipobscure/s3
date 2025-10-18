@@ -10,7 +10,8 @@
 	},
 	"formatter": {
 		"enabled": true,
-		"indentStyle": "tab"
+		"indentStyle": "tab",
+		"lineEnding": "lf"
 	},
 	"linter": {
 		"enabled": true,
@@ -23,7 +24,13 @@
 	},
 	"javascript": {
 		"formatter": {
-			"quoteStyle": "double"
+			"arrowParentheses": "always",
+			"bracketSameLine": false,
+			"bracketSpacing": true,
+			"quoteProperties": "asNeeded",
+			"semicolons": "always",
+			"trailingCommas": "all",
+			"quoteStyle": "single"
 		}
 	},
 	"assist": {

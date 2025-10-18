@@ -1,145 +1,103 @@
-import * as HTTPS from "node:https";
-import * as CRYPTO from "node:crypto";
-import type { IncomingHttpHeaders } from "node:http";
-import * as XML from "xml-js";
+import * as CRYPTO from 'node:crypto';
+import * as XML from 'xml-js';
 
 export type S3Options = {
 	key: string;
 	secret: string;
 	endpoint: string;
 	bucket: string;
-	signal?: AbortSignal;
 	hostBased?: boolean;
 };
-export type S3Method = "GET" | "PUT" | "DELETE" | "HEAD";
+export type S3Method = 'GET' | 'PUT' | 'DELETE' | 'HEAD' | 'POST';
 
-const QUERY_WHITELIST = [
-	"acl",
-	"delete",
-	"lifecycle",
-	"location",
-	"logging",
-	"notification",
-	"partNumber",
-	"policy",
-	"requestPayment",
-	"torrent",
-	"uploadId",
-	"uploads",
-	"versionId",
-	"versioning",
-	"versions",
-	"website",
-];
-
-export type AWSProperty = "If-Match";
+export type AWSProperty = 'If-Match' | 'Content-Type';
 export type AWSProperties = Record<AWSProperty, string>;
-
+const AWSParams = ['acl', 'lifecycle', 'location', 'logging', 'notification', 'partNumber', 'policy', 'requestPayment', 'uploadId', 'uploads', 'versionId', 'versioning', 'versions', 'website'];
+export type UploadPart = {
+	number: number;
+	etag: string;
+	sha1?: string;
+	sha256?: string;
+};
 export class S3 {
 	#key: string;
 	#secret: string;
 	#endpoint: string;
 	#bucket: string;
-	#signal?: AbortSignal;
 	#hostBased: boolean;
 	constructor(options: S3Options) {
-		const {
-			key,
-			secret,
-			endpoint,
-			bucket,
-			signal,
-			hostBased = false,
-		} = options;
+		const { key, secret, endpoint, bucket, hostBased = false } = options;
 		this.#key = key;
 		this.#secret = secret;
 		this.#endpoint = endpoint;
 		this.#bucket = bucket;
-		this.#signal = signal;
 		this.#hostBased = hostBased;
 	}
 	#url(filename: string) {
 		if (this.#hostBased) {
 			return new URL(
-				`/${filename}`.split(/\/+/).join("/"),
+				`/${filename}`.split(/\/+/).join('/'),
 				`https://${this.#bucket}.${this.#endpoint}`,
 			);
 		} else {
 			return new URL(
-				`/${this.#bucket}/${filename}`.split(/\/+/).join("/"),
+				`/${this.#bucket}/${filename}`.split(/\/+/).join('/'),
 				`https://${this.#endpoint}`,
 			);
 		}
 	}
-	#request(
+	async #request(
 		method: S3Method,
 		url: URL,
-		headers: Record<string, string>,
-		content?: Buffer<ArrayBufferLike>,
+		hdrs: Record<string, string>,
+		sendbody?: Buffer,
 	) {
-		return new Promise<{
-			content: Buffer<ArrayBufferLike> | null;
-			headers: IncomingHttpHeaders;
-		}>((resolve, reject) => {
-			for (const key of url.searchParams.keys()) {
-				if (!QUERY_WHITELIST.includes(key)) url.searchParams.delete(key);
-			}
-			const date = new Date();
-			const resource = `${url.pathname}${url.search}`;
-			headers.Date = date.toUTCString();
-			headers.Host = url.host;
-			if (content) {
-				headers["Content-Length"] = `${content.byteLength}`;
-				headers["Content-MD5"] = CRYPTO.createHash("md5")
-					.update(content)
-					.digest("base64");
-				headers["Content-Type"] =
-					headers["Content-Type"] ?? "application/octet-stream";
-			}
-			const signature = sign(
-				this.#secret,
-				method,
-				headers["Content-MD5"] ?? "",
-				headers["Content-Type"] ?? "",
-				headers.Date,
-				canonicalizeHeaders(headers),
-				resource,
-			);
-			headers.Authorization = `AWS ${this.#key}:${signature}`;
+		const date = new Date();
+		let resource = (`${this.#hostBased ? `/${this.#bucket}` : ''}${url.pathname}`);
+		let first = true;
+		for (const [key, val] of url.searchParams) {
+			if (!AWSParams.includes(key)) continue;
+			resource = `${resource}${first ? '?' : '&'}${key}${val ? `=${encodeURIComponent(val)}` : ''}`;
+			first = false;
+		}
+		hdrs.Date = date.toUTCString();
+		hdrs.Host = url.host;
+		if (sendbody?.length) {
+			hdrs['Content-Length'] = `${sendbody.length}`;
+			hdrs['Content-MD5'] = CRYPTO.createHash('md5')
+				.update(sendbody)
+				.digest('base64');
+			hdrs['Content-Type'] = hdrs['Content-Type'] ?? 'application/octet-stream';
+		}
+		const signature = sign(
+			this.#secret,
+			method,
+			hdrs['Content-MD5'] ?? '',
+			hdrs['Content-Type'] ?? '',
+			hdrs.Date,
+			canonicalizeHeaders(hdrs),
+			resource,
+		);
+		hdrs.Authorization = `AWS ${this.#key}:${signature}`;
+		const body = sendbody as Uint8Array | undefined;
+		const response = await fetch(url, {
+			method,
+			headers: hdrs,
+			body,
+		} as any as RequestInit);
 
-			HTTPS.request(
-				url,
-				{
-					method,
-					headers,
-					signal: this.#signal,
-				},
-				async (response) => {
-					try {
-						const content =
-							method === "HEAD" || response.statusCode === 204
-								? null
-								: await body(response);
-						if (!response.statusCode) return reject(new Error(`No Repsonse`));
-						if (response.statusCode < 200 || response.statusCode > 399)
-							return reject(new Error(`HTTP ${response.statusCode}`));
-						if (response.statusCode > 299)
-							return reject(new Error("cannot redirect"));
-						resolve({
-							content: content?.length ? content : null,
-							headers: response.headers,
-						});
-					} catch (err) {
-						return reject(err);
-					}
-				},
-			)
-				.on("error", (err) => reject(err))
-				.end(content);
-		});
+		if (!response.ok) {
+			throw new Error(
+				`HTTP(${response.status}) ${response.statusText} [${method} ${url}]`,
+			);
+		}
+		const bytes = (await response.bytes()) ?? null;
+		const content = bytes ? Buffer.from(bytes) : null;
+		const headers = response.headers;
+		return { headers, content };
 	}
-	async head(resource: string): Promise<IncomingHttpHeaders> {
-		const { headers } = await this.#request("HEAD", this.#url(resource), {});
+	async head(resource: string): Promise<Headers> {
+		const { headers } = await this.#request('HEAD', this.#url(resource), {});
 		return headers;
 	}
 	async get(
@@ -148,10 +106,10 @@ export class S3 {
 	): Promise<Buffer<ArrayBufferLike> | null> {
 		const headers: Record<string, string> = {};
 		if (etag) {
-			headers["If-None-Match"] = etag;
+			headers['If-None-Match'] = etag;
 		}
 		const { content } = await this.#request(
-			"GET",
+			'GET',
 			this.#url(resource),
 			headers,
 		);
@@ -163,18 +121,18 @@ export class S3 {
 		properties: Partial<AWSProperties & { type: string }> = {},
 	) {
 		let { type, ...hdrs } = properties;
-		if ("string" === typeof content) {
-			content = Buffer.from(content, "utf-8");
-			type = type ?? "text/plain; charset=utf-8";
+		if ('string' === typeof content) {
+			content = Buffer.from(content, 'utf-8');
+			type = type ?? 'text/plain; charset=utf-8';
 		}
 		if (!Buffer.isBuffer(content)) {
-			content = Buffer.from(JSON.stringify(content), "utf-8");
-			type = type ?? "application/json; charset=utf-8";
+			content = Buffer.from(JSON.stringify(content), 'utf-8');
+			type = type ?? 'application/json; charset=utf-8';
 		}
 		const { headers } = await this.#request(
-			"PUT",
+			'PUT',
 			this.#url(resource),
-			Object.assign(hdrs, { type: type ?? "application/octet-stream" }),
+			Object.assign(hdrs, { type: type ?? 'application/octet-stream' }),
 			content,
 		);
 		return headers;
@@ -182,30 +140,37 @@ export class S3 {
 	async del(resource: string) {
 		const hdrs: Record<string, string> = {};
 		const { headers } = await this.#request(
-			"DELETE",
+			'DELETE',
 			this.#url(resource),
 			hdrs,
 		);
 		return headers;
 	}
-	async list(
+	async #list(
 		prefix?: string,
-		delimiter?: string,
 		options?: Record<string, string>,
-	): Promise<{ name: string; size: number; modified: number }[]> {
-		const url = this.#url("/");
-		if (prefix) {
-			url.searchParams.set("prefix", prefix);
-			url.searchParams.set("delimiter", delimiter ?? "/");
-		}
+		continuation?: string
+	): Promise<{ continuation?: string, items: { name: string; size: number; modified: number }[] }> {
+		const url = this.#url('/');
 		if (options) {
-			for (const [key, val] of Object.entries(options))
+			for (const [key, val] of Object.entries(options)) {
 				url.searchParams.set(key, val);
+			}
 		}
-		const { content } = await this.#request("GET", url, {});
-		if (!content?.length)
+		url.searchParams.set('list-type', '2');
+		if (continuation) {
+			url.searchParams.set('continuation-token', continuation);
+		}
+		if (prefix) {
+			url.searchParams.set('delimiter', '/');
+			url.searchParams.set('prefix', prefix);
+		}
+
+		const { content } = await this.#request('GET', url, {});
+		if (!content?.length) {
 			throw new Error(`failed to list objects in ${prefix}`);
-		const data = XML.xml2js(content.toString("utf-8"), {
+		}
+		const data = XML.xml2js(content.toString('utf-8'), {
 			compact: true,
 			trim: true,
 			ignoreDeclaration: true,
@@ -215,13 +180,30 @@ export class S3 {
 			alwaysArray: true,
 		}) as any;
 		const contents = data?.ListBucketResult?.[0]?.Contents ?? [];
-		return contents.map((item: any) => {
-			const name = item?.Key?.[0]?._text?.join("");
-			const modified =
-				item?.LastModified?.[0]?._text?.join("") ?? new Date().toISOString();
-			const size = +(item?.Size?.[0]?._text?.join("") ?? 0);
-			return { name, size, modified };
-		});
+		return {
+			continuation: data?.ListBucketResult?.[0]?.NextContinuationToken,
+			items: contents.map((item: any) => {
+				const name = item?.Key?.[0]?._text?.join('');
+				const modified =
+					item?.LastModified?.[0]?._text?.join('') ?? new Date().toISOString();
+				const size = +(item?.Size?.[0]?._text?.join('') ?? 0);
+				return { name, size, modified };
+			})
+		}
+	}
+	async *list(prefix?: string, options?: Record<string, string>) {
+		prefix = prefix
+			?.split(/\/+/)
+			.flatMap((x) => ((x = x.trim()), x ? [x] : []))
+			.join('/');
+		prefix = prefix ? `${prefix}/` : undefined;
+
+		let continuation: string | undefined;
+		let items: { name: string; size: number; modified: number }[] = [];
+		do {
+			({ items, continuation } = await this.#list(prefix, options));
+			yield* items;
+		} while (continuation);
 	}
 	async copy(
 		resource: string,
@@ -229,18 +211,18 @@ export class S3 {
 		properties?: Partial<AWSProperties>,
 	) {
 		const result = await this.#request(
-			"PUT",
+			'PUT',
 			this.#url(resource),
 			Object.assign(
 				{
-					"x-amz-copy-source": source,
+					'x-amz-copy-source': source,
 				},
 				properties ?? {},
 			),
 		);
 		if (result.content?.length) {
 			return Object.assign(
-				XML.xml2json(result.content.toString("utf-8")),
+				XML.xml2json(result.content.toString('utf-8')),
 				result.headers,
 			);
 		} else {
@@ -248,16 +230,17 @@ export class S3 {
 		}
 	}
 }
+export default S3;
 
 function canonicalizeHeaders(headers: Record<string, string>) {
 	const result: [string, string][] = [];
 	for (let [key, val] of Object.entries(headers)) {
 		key = key.toLowerCase();
-		if (!key.startsWith("x-amz") || key === "x-amz-date") continue;
+		if (!key.startsWith('x-amz') || key === 'x-amz-date') continue;
 		result.push([key, val]);
 	}
 	result.sort((a, b) => (a[0] > b[0] ? 1 : -1));
-	return result.map((...args) => args.join(":"));
+	return result.map((...args) => args.join(':'));
 }
 function sign(
 	secret: string,
@@ -268,17 +251,26 @@ function sign(
 	awsheaders: string[],
 	resource: string,
 ) {
-	const message = [method, md5, type, date, ...awsheaders, resource].join("\n");
-	return CRYPTO.createHmac("sha1", secret)
-		.update(Buffer.from(message, "utf-8"))
-		.digest("base64");
+	const message = [method, md5, type, date, ...awsheaders, resource].join('\n');
+	return CRYPTO.createHmac('sha1', secret)
+		.update(Buffer.from(message, 'utf-8'))
+		.digest('base64');
 }
-async function body(body: AsyncIterable<Buffer<ArrayBufferLike>>) {
-	const buf = [];
-	let len = 0;
-	for await (const chunk of body) {
-		buf.push(chunk);
-		len += chunk.byteLength;
+
+function* partXML(part: UploadPart) {
+	yield '<Part>';
+	if (part.sha1) yield `\t<ChecksumSHA1>${part.sha1}</ChecksumSHA1>`;
+	if (part.sha256) yield `\t<ChecksumSHA256>${part.sha256}</ChecksumSHA256>`;
+	yield `\t<ETag>${part.etag}</ETag>`;
+	yield `\t<PartNumber>${part.number}</PartNumber>`;
+	yield '</Part>';
+}
+function* partsXML(parts: Iterable<UploadPart>) {
+	yield '<?xml version="1.0" encoding="UTF-8"?>';
+	yield '<CompleteMultipartUpload xmlns="http://s3.amazonaws.com/doc/2006-03-01/">';
+	for (const part of parts) {
+		for (const line of partXML(part)) yield `\t${line}`;
 	}
-	return Buffer.concat(buf, len);
+	yield '</CompleteMultipartUpload>';
+	yield '';
 }
