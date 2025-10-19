@@ -3,7 +3,7 @@
 	"version": "2.0.3",
 	"description": "Simple AWS S3 Library",
 	"type": "module",
-	"export": "./dist/s3.js",
+	"exports": "./dist/s3.js",
 	"files": [
 		"README.md",
 		"package.json",
