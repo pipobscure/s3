@@ -20,10 +20,6 @@ const s3options: {
 const s3client = new S3(s3options);
 
 const content = await s3client.get('/my/resource/name.file');
-await s3client.put('/my/resource/name.file', content, {...}); // the optional last options are extra properties
-await s3client.delete('/my/resource/name.file');
-const list = await s3client.list('/my/resource', '/'); // separator '/' is optional
-await s3client.copy('/my/resource/destination.file', 'otherbucket/my/source/file.dat');
 ```
 ## License
 
