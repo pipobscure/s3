@@ -110,7 +110,10 @@ export class S3 {
 					`HTTP(${response.status}) ${response.statusText} [${method} ${url}]`,
 				),
 				{
+					url: `${url}`,
 					status: response.status,
+					'request-headers': hdrs,
+					'response-headers': Object.fromEntries(response.headers.entries()),
 					text: bytes ? Buffer.from(bytes).toString('utf-8') : undefined,
 				},
 			);
@@ -125,7 +128,9 @@ export class S3 {
 		const { headers } = await this.#request('HEAD', this.#url(name), {});
 		const size = +(headers.get('content-length') ?? 0);
 		const type = headers.get('content-type') ?? 'application/octet-stream';
-		const etag = JSON.parse(headers.get('etag') ?? '""');
+		const etag = (JSON.parse(headers.get('etag') ?? '""') || undefined) as
+			| string
+			| undefined;
 		const modified = new Date(
 			headers.has('last-modified')
 				? Date.parse(headers.get('last-modified') as string)
@@ -179,7 +184,9 @@ export class S3 {
 
 		const hdrs: Record<string, string> = { 'Content-Type': type };
 		if (etag) {
-			hdrs['If-Match'] = JSON.stringify(etag);
+			hdrs['If-Match'] = etag;
+		} else {
+			hdrs['If-None-Match'] = '*';
 		}
 		if ('string' === typeof content) {
 			content = Buffer.from(content, 'utf-8');
@@ -192,18 +199,13 @@ export class S3 {
 				hdrs['Content-Type'] ?? 'application/json; charset=utf-8';
 		}
 		hdrs['Content-Type'] = hdrs['Content-Type'] ?? 'application/octet-stream';
-		try {
-			const { headers } = await this.#request(
-				'PUT',
-				this.#url(resource),
-				hdrs,
-				content as Buffer,
-			);
-			return JSON.parse(headers.get('etag') ?? '""') as string;
-		} catch (err) {
-			if (etag && (err as any).status === 409) return etag;
-			throw err;
-		}
+		const { headers } = await this.#request(
+			'PUT',
+			this.#url(resource),
+			hdrs,
+			content as Buffer,
+		);
+		return JSON.parse(headers.get('etag') ?? '""') as string;
 	}
 	async del(resource: string, etag?: string) {
 		const hdrs: Record<string, string> = {};
@@ -285,6 +287,8 @@ export class S3 {
 		const hdrs: Record<string, string> = { 'x-amz-copy-source': source };
 		if (etag) {
 			hdrs['If-Match'] = JSON.stringify(etag);
+		} else {
+			hdrs['If-None-Match'] = '*';
 		}
 		const { content } = await this.#request('PUT', this.#url(target), hdrs);
 		if (!content) throw new Error('missing response');
@@ -383,7 +387,11 @@ export class S3 {
 		etag?: string,
 	): Promise<string> {
 		const hdrs: Record<string, string> = { 'Content-Type': type };
-		if (etag) hdrs.ETag = JSON.stringify(etag);
+		if (etag) {
+			hdrs['If-Match'] = etag;
+		} else {
+			hdrs['If-None-Match'] = '*';
+		}
 		const store: Buffer[] = [];
 		let length = 0;
 		let uploadId: string | null = null;
