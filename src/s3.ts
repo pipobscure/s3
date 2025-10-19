@@ -11,7 +11,7 @@ export type S3Options = {
 };
 export type S3Method = 'GET' | 'PUT' | 'DELETE' | 'HEAD' | 'POST';
 
-export type AWSProperty = 'If-Match' | 'Content-Type';
+export type AWSProperty = 'If-Match' | 'Range' | 'Content-Type';
 export type AWShdrs = Record<AWSProperty, string>;
 const AWSParams = [
 	'acl',
@@ -67,6 +67,7 @@ export class S3 {
 		url: URL,
 		hdrs: Record<string, string>,
 		sendbody?: Buffer,
+		stream?: boolean,
 	) {
 		const date = new Date();
 		let resource = `${this.#hostBased ? `/${this.#bucket}` : ''}${url.pathname}`;
@@ -102,30 +103,40 @@ export class S3 {
 			body,
 		} as any as RequestInit);
 
-		const bytes = (await response.bytes()) ?? null;
 		if (!response.ok) {
+			const bytes = (await response.bytes()) ?? null;
 			throw Object.assign(
 				new Error(
 					`HTTP(${response.status}) ${response.statusText} [${method} ${url}]`,
 				),
-				{ text: bytes ? Buffer.from(bytes).toString('utf-8') : undefined },
+				{
+					status: response.status,
+					text: bytes ? Buffer.from(bytes).toString('utf-8') : undefined,
+				},
 			);
 		}
-		const content = bytes ? Buffer.from(bytes) : null;
+		const content = stream
+			? response.body
+			: Buffer.from(await response.bytes());
 		const headers = response.headers;
 		return { headers, content };
 	}
-	async head(resource: string): Promise<Headers> {
-		const { headers } = await this.#request('HEAD', this.#url(resource), {});
-		return headers;
+	async head(name: string) {
+		const { headers } = await this.#request('HEAD', this.#url(name), {});
+		const size = +(headers.get('content-length') ?? 0);
+		const type = headers.get('content-type') ?? 'application/octet-stream';
+		const etag = JSON.parse(headers.get('etag') ?? '""');
+		const modified = new Date(
+			headers.has('last-modified')
+				? Date.parse(headers.get('last-modified') as string)
+				: Date.now(),
+		).toISOString();
+		return { name, size, type, modified, etag };
 	}
-	async get(
-		resource: string,
-		etag?: string,
-	): Promise<Buffer<ArrayBufferLike> | null> {
+	async get(resource: string, etag?: string) {
 		const headers: Record<string, string> = {};
 		if (etag) {
-			headers['If-None-Match'] = etag;
+			headers['If-None-Match'] = JSON.stringify(etag);
 		}
 		const { content } = await this.#request(
 			'GET',
@@ -134,21 +145,42 @@ export class S3 {
 		);
 		return content;
 	}
+	async *stream(resource: string, etag?: string): AsyncIterable<Buffer> {
+		const headers: Record<string, string> = {};
+		if (etag) {
+			headers['If-None-Match'] = JSON.stringify(etag);
+		}
+		const { content } = await this.#request(
+			'GET',
+			this.#url(resource),
+			headers,
+			undefined,
+			true,
+		);
+		if (!content) throw new Error('missing content');
+		for await (const chunk of content as ReadableStream<Uint8Array>) {
+			yield Buffer.from(chunk) as Buffer;
+		}
+	}
 	async put(
 		resource: string,
-		content:
-			| AsyncIterable<Buffer<ArrayBufferLike>>
-			| Buffer<ArrayBufferLike>
-			| string
-			| object,
-		hdrs: Partial<AWShdrs> = {},
+		content: AsyncIterable<Buffer> | Buffer | string | object,
+		type: string = 'application/octet-stream',
+		etag?: string,
 	) {
-		if ((content as any)[Symbol.asyncIterator])
+		if ((content as any)[Symbol.asyncIterator]) {
 			return await this.#putStream(
 				resource,
-				content as AsyncIterable<Buffer<ArrayBufferLike>>,
-				hdrs,
+				content as AsyncIterable<Buffer>,
+				type,
+				etag,
 			);
+		}
+
+		const hdrs: Record<string, string> = { 'Content-Type': type };
+		if (etag) {
+			hdrs['If-Match'] = JSON.stringify(etag);
+		}
 		if ('string' === typeof content) {
 			content = Buffer.from(content, 'utf-8');
 			hdrs['Content-Type'] =
@@ -160,22 +192,25 @@ export class S3 {
 				hdrs['Content-Type'] ?? 'application/json; charset=utf-8';
 		}
 		hdrs['Content-Type'] = hdrs['Content-Type'] ?? 'application/octet-stream';
-		const { headers } = await this.#request(
-			'PUT',
-			this.#url(resource),
-			hdrs,
-			content as Buffer<ArrayBufferLike>,
-		);
-		return JSON.parse(headers.get('etag') as string);
+		try {
+			const { headers } = await this.#request(
+				'PUT',
+				this.#url(resource),
+				hdrs,
+				content as Buffer,
+			);
+			return JSON.parse(headers.get('etag') ?? '""') as string;
+		} catch (err) {
+			if (etag && (err as any).status === 409) return etag;
+			throw err;
+		}
 	}
-	async del(resource: string) {
+	async del(resource: string, etag?: string) {
 		const hdrs: Record<string, string> = {};
-		const { headers } = await this.#request(
-			'DELETE',
-			this.#url(resource),
-			hdrs,
-		);
-		return headers;
+		if (etag) {
+			hdrs['If-Match'] = JSON.stringify(etag);
+		}
+		await this.#request('DELETE', this.#url(resource), hdrs);
 	}
 	async #list(
 		prefix?: string,
@@ -183,7 +218,7 @@ export class S3 {
 		continuation?: string,
 	): Promise<{
 		continuation?: string;
-		items: { name: string; size: number; modified: number }[];
+		items: { name: string; size: number; etag: string; modified: number }[];
 	}> {
 		const url = this.#url('/');
 		if (options) {
@@ -200,7 +235,10 @@ export class S3 {
 			url.searchParams.set('prefix', prefix);
 		}
 
-		const { content } = await this.#request('GET', url, {});
+		const { content } = (await this.#request('GET', url, {})) as {
+			headers: Headers;
+			content: Buffer;
+		};
 		if (!content?.length) {
 			throw new Error(`failed to list objects in ${prefix}`);
 		}
@@ -221,7 +259,8 @@ export class S3 {
 				const modified =
 					item?.LastModified?.[0]?._text?.join('') ?? new Date().toISOString();
 				const size = +(item?.Size?.[0]?._text?.join('') ?? 0);
-				return { name, size, modified };
+				const etag = item?.ETag?.[0]?._text?.join('') ?? 'invalid';
+				return { name, size, etag, modified };
 			}),
 		};
 	}
@@ -239,14 +278,15 @@ export class S3 {
 			yield* items;
 		} while (continuation);
 	}
-	async copy(source: string, target: string, hdrs: Partial<AWShdrs> = {}) {
+	async copy(target: string, source: string, etag?: string) {
 		source = [this.#bucket, ...source.split(/\/+/)]
 			.filter((x) => (x = x.trim()))
 			.join('/');
-		const { content } = await this.#request('PUT', this.#url(target), {
-			...hdrs,
-			'x-amz-copy-source': source,
-		});
+		const hdrs: Record<string, string> = { 'x-amz-copy-source': source };
+		if (etag) {
+			hdrs['If-Match'] = JSON.stringify(etag);
+		}
+		const { content } = await this.#request('PUT', this.#url(target), hdrs);
 		if (!content) throw new Error('missing response');
 		const response = XML.xml2js(content.toString('utf-8'), {
 			compact: true,
@@ -257,18 +297,18 @@ export class S3 {
 			ignoreComment: true,
 			alwaysArray: true,
 		}) as any;
-		const etag = response?.CopyObjectResult?.[0]?.ETag?.[0]?._text?.[0];
-		return JSON.parse(etag ?? '""');
+		const newetag = response?.CopyObjectResult?.[0]?.ETag?.[0]?._text?.join('');
+		return JSON.parse(newetag ?? '""');
 	}
 	async #startMultipart(resource: string, headers: Partial<AWShdrs> = {}) {
 		const url = this.#url(resource);
 		url.search = 'uploads';
-		const { content } = await this.#request(
+		const { content } = (await this.#request(
 			'POST',
 			url,
 			headers,
 			Buffer.alloc(0),
-		);
+		)) as { content: Buffer };
 		if (!content?.length) {
 			throw new Error(`failed to start multi-part upload for ${resource}`);
 		}
@@ -289,14 +329,17 @@ export class S3 {
 		resource: string,
 		uploadId: string,
 		num: number,
-		content: Buffer<ArrayBufferLike>,
+		content: Buffer,
 		hdrs: Partial<AWShdrs> = {},
-	) {
+	): Promise<UploadPart> {
 		const url = this.#url(resource);
 		url.searchParams.set('partNumber', `${num}`);
 		url.searchParams.set('uploadId', uploadId);
 		const { headers } = await this.#request('PUT', url, hdrs, content);
-		return JSON.parse(headers.get('etag') as string);
+		return {
+			number: num,
+			etag: JSON.parse(headers.get('etag') ?? '""') as string,
+		};
 	}
 	async #commitMultipart(
 		resource: string,
@@ -335,39 +378,53 @@ export class S3 {
 	}
 	async #putStream(
 		name: string,
-		content: AsyncIterable<Buffer<ArrayBufferLike>>,
-		hdrs: Partial<AWShdrs> = {},
+		content: AsyncIterable<Buffer>,
+		type: string,
+		etag?: string,
 	): Promise<string> {
-		const store: Buffer<ArrayBufferLike>[] = [];
+		const hdrs: Record<string, string> = { 'Content-Type': type };
+		if (etag) hdrs.ETag = JSON.stringify(etag);
+		const store: Buffer[] = [];
 		let length = 0;
 		let uploadId: string | null = null;
-		const parts: UploadPart[] = [];
+		const parts: Promise<UploadPart | undefined>[] = [];
 		try {
+			const controller = new AbortController();
 			for await (const chunk of content) {
 				store.push(chunk);
 				length += chunk.length;
 				if (length > MIN_CHUNK_SIZE) {
-					uploadId = uploadId ?? ((await this.#startMultipart(name)) as string);
+					uploadId =
+						uploadId ?? ((await this.#startMultipart(name, hdrs)) as string);
 					const content = Buffer.concat(store.splice(0, store.length), length);
 					length = 0;
-					const number = parts.length + 1;
-					const etag = await this.#uploadPart(
-						name,
-						uploadId as string,
-						number,
-						content,
+					parts.push(
+						this.#uploadPart(
+							name,
+							uploadId as string,
+							parts.length + 1,
+							content,
+						).catch((err) => (controller.abort(err), undefined)),
 					);
-					parts.push({ etag, number });
+					controller.signal.throwIfAborted();
 				}
 			}
 			if (uploadId) {
 				if (length) {
 					const content = Buffer.concat(store, length);
-					const number = parts.length + 1;
-					const etag = await this.#uploadPart(name, uploadId, number, content);
-					parts.push({ etag, number });
+					parts.push(
+						this.#uploadPart(name, uploadId, parts.length + 1, content).catch(
+							(err) => (controller.abort(err), undefined),
+						),
+					);
+					controller.signal.throwIfAborted();
 				}
-				const etag = await this.#commitMultipart(name, uploadId, parts, hdrs);
+				const allparts = await Promise.all(parts);
+				controller.signal.throwIfAborted();
+				const sorted = (allparts as UploadPart[]).sort(
+					(a, b) => b.number - a.number,
+				);
+				const etag = await this.#commitMultipart(name, uploadId, sorted, hdrs);
 				return etag;
 			}
 		} catch (err) {
@@ -381,7 +438,7 @@ export class S3 {
 			throw err;
 		}
 		const data = Buffer.concat(store, length);
-		return await this.put(name, data, hdrs);
+		return await this.put(name, data, hdrs['Content-Type'], hdrs['If-Match']);
 	}
 }
 export default S3;

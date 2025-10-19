@@ -57,7 +57,7 @@ describe('MultiPart', () => {
 		test(s3)('validate', async () => {
 			assertS3(s3);
 			const headers = await s3.head(`${prefix}/${filename}`);
-			assert.equal(JSON.parse(headers?.get('etag') ?? '""'), etag);
+			assert.equal(headers.etag, etag);
 		});
 	});
 	describe('small stream', () => {
@@ -70,7 +70,7 @@ describe('MultiPart', () => {
 		test(s3)('validate', async () => {
 			assertS3(s3);
 			const headers = await s3.head(`${prefix}/${filename}`);
-			assert.equal(JSON.parse(headers?.get('etag') ?? '""'), etag);
+			assert.equal(headers.etag, etag);
 		});
 	});
 });

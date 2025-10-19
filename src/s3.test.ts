@@ -29,15 +29,28 @@ describe('S3 Tests', () => {
 			assert(result);
 			etag = result;
 		});
+		test(s3)('put(etag)', async () => {
+			assertS3(s3);
+			const result = await s3.put(`${prefix}/${filename}`, content);
+			assert.equal(result, etag);
+		});
 		test(s3)('get', async () => {
 			assertS3(s3);
 			const result = await s3.get(`${prefix}/${filename}`);
 			assert.equal(result?.toString('hex'), content.toString('hex'));
 		});
+		test(s3)('stream', async () => {
+			assertS3(s3);
+			const result = Buffer.concat(
+				await Array.fromAsync(s3.stream(`${prefix}/${filename}`)),
+			);
+			assert.equal(result?.toString('hex'), content.toString('hex'));
+		});
+
 		test(s3)('head', async () => {
 			assertS3(s3);
 			const result = await s3.head(`${prefix}/${filename}`);
-			assert.equal(JSON.parse(result?.get('etag') ?? '""'), etag);
+			assert.equal(result.etag, etag);
 		});
 		test(s3)('list', async () => {
 			assertS3(s3);
@@ -50,20 +63,19 @@ describe('S3 Tests', () => {
 		test(s3)('copy', async () => {
 			assertS3(s3);
 			const etag = await s3.copy(
-				`${prefix}/${filename}`,
 				`${prefix}/${filename}-2`,
+				`${prefix}/${filename}`,
 			);
 			assert(etag);
 			const headers = await s3.head(`${prefix}/${filename}-2`);
-			assert.equal(etag, JSON.parse(headers.get('etag') ?? '""'));
+			assert.equal(etag, headers.etag);
 			const original = await s3.head(`${prefix}/${filename}`);
-			assert.equal(etag, JSON.parse(original.get('etag') ?? '""'));
+			assert.equal(etag, original.etag);
 			await s3.del(`${prefix}/${filename}-2`);
 		});
 		test(s3)('del', async () => {
 			assertS3(s3);
-			const result = await s3.del(`${prefix}/${filename}`);
-			assert(result);
+			await s3.del(`${prefix}/${filename}`);
 			assert.rejects(async () => await s3.head(`${prefix}/${filename}`));
 		});
 	});
