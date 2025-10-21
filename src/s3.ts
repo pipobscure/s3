@@ -35,6 +35,7 @@ type UploadPart = {
 	sha1?: string;
 	sha256?: string;
 };
+type ListOptions = Record<Exclude<string, 'signal'>, string> & { signal?: AbortSignal };
 export class S3 {
 	#key: string;
 	#secret: string;
@@ -252,7 +253,6 @@ export class S3 {
 		);
 		return JSON.parse(headers.get('etag') ?? '""') as string;
 	}
-	del(resource: string, etagOrSignal?: string | AbortSignal): Promise<void>;
 	async del(resource: string, etag?: string | AbortSignal, signal?: AbortSignal) {
 		if (etag && (etag instanceof AbortSignal)) {
 			if (signal instanceof AbortSignal) {
@@ -270,8 +270,8 @@ export class S3 {
 	}
 	async #list(
 		prefix?: string,
-		options?: Record<string, string> & { signal?: AbortSignal },
 		continuation?: string,
+		options?: ListOptions
 	): Promise<{
 		continuation?: string;
 		items: { name: string; size: number; etag: string; modified: number }[];
@@ -321,7 +321,7 @@ export class S3 {
 			}),
 		};
 	}
-	async *list(prefix?: string, options?: Record<string, string> & { signal?: AbortSignal }) {
+	async *list(prefix?: string, options?: ListOptions) {
 		prefix = prefix
 			?.split(/\/+/)
 			.flatMap((x) => ((x = x.trim()), x ? [x] : []))
@@ -331,11 +331,10 @@ export class S3 {
 		let continuation: string | undefined;
 		let items: { name: string; size: number; modified: number }[] = [];
 		do {
-			({ items, continuation } = await this.#list(prefix, options));
+			({ items, continuation } = await this.#list(prefix, continuation, options));
 			yield* items;
 		} while (continuation);
 	}
-	copy(target: string, source: string, etagOrSignal?: string | AbortSignal): Promise<string>;
 	async copy(target: string, source: string, etag?: string | AbortSignal, signal?: AbortSignal) {
 		if (etag && (etag instanceof AbortSignal)) {
 			if (signal instanceof AbortSignal) {
