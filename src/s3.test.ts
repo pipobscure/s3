@@ -31,7 +31,11 @@ describe('S3 Tests', () => {
 		});
 		test(s3)('put(etag)', async () => {
 			assertS3(s3);
-			const result = await s3.put(`${prefix}/${filename}`, content, etag ?? undefined);
+			const result = await s3.put(
+				`${prefix}/${filename}`,
+				content,
+				etag ?? undefined,
+			);
 			assert.equal(result, etag);
 		});
 		test(s3)('get', async () => {

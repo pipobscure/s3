@@ -35,7 +35,7 @@ type UploadPart = {
 	sha1?: string;
 	sha256?: string;
 };
-type ListOptions = Record<Exclude<string, 'signal'>, string> & { signal?: AbortSignal };
+
 export class S3 {
 	#key: string;
 	#secret: string;
@@ -128,7 +128,14 @@ export class S3 {
 		return { headers, content };
 	}
 	async head(name: string, signal?: AbortSignal) {
-		const { headers } = await this.#request('HEAD', this.#url(name), {}, undefined, undefined, signal);
+		const { headers } = await this.#request(
+			'HEAD',
+			this.#url(name),
+			{},
+			undefined,
+			undefined,
+			signal,
+		);
 		const size = +(headers.get('content-length') ?? 0);
 		const type = headers.get('content-type') ?? 'application/octet-stream';
 		const etag = (JSON.parse(headers.get('etag') ?? '""') || undefined) as
@@ -142,8 +149,12 @@ export class S3 {
 		return { name, size, type, modified, etag };
 	}
 	get(resource: string, etagOrSignal?: string | AbortSignal): Promise<Buffer>;
-	async get(resource: string, etag?: string | AbortSignal, signal?: AbortSignal) {
-		if (etag && (etag instanceof AbortSignal)) {
+	async get(
+		resource: string,
+		etag?: string | AbortSignal,
+		signal?: AbortSignal,
+	) {
+		if (etag && etag instanceof AbortSignal) {
 			if (signal instanceof AbortSignal) {
 				signal = AbortSignal.any([etag, signal]);
 			} else {
@@ -161,13 +172,20 @@ export class S3 {
 			headers,
 			undefined,
 			undefined,
-			signal
+			signal,
 		);
 		return content as Buffer;
 	}
-	stream(resource: string, etagOrSignal?: string | AbortSignal): AsyncGenerator<Buffer>;
-	async *stream(resource: string, etag?: string | AbortSignal, signal?: AbortSignal): AsyncIterable<Buffer> {
-		if (etag && (etag instanceof AbortSignal)) {
+	stream(
+		resource: string,
+		etagOrSignal?: string | AbortSignal,
+	): AsyncGenerator<Buffer>;
+	async *stream(
+		resource: string,
+		etag?: string | AbortSignal,
+		signal?: AbortSignal,
+	): AsyncIterable<Buffer> {
+		if (etag && etag instanceof AbortSignal) {
 			if (signal instanceof AbortSignal) {
 				signal = AbortSignal.any([etag, signal]);
 			} else {
@@ -185,7 +203,7 @@ export class S3 {
 			headers,
 			undefined,
 			true,
-			signal
+			signal,
 		);
 		if (!content) throw new Error('missing content');
 		for await (const chunk of content as ReadableStream<Uint8Array>) {
@@ -199,13 +217,17 @@ export class S3 {
 		content: AsyncIterable<Buffer> | Buffer | string | object,
 		type?: string | AbortSignal,
 		etag?: string | AbortSignal,
-		signal?: AbortSignal
+		signal?: AbortSignal,
 	) {
 		if (!signal) {
-			const signals = [type, etag, signal].filter(x => (x instanceof AbortSignal));
+			const signals = [type, etag, signal].filter(
+				(x) => x instanceof AbortSignal,
+			);
 			signal = signals.length ? AbortSignal.any(signals) : undefined;
-			type = type instanceof AbortSignal ? undefined : (type as (string | undefined));
-			etag = etag instanceof AbortSignal ? undefined : (etag as (string | undefined));
+			type =
+				type instanceof AbortSignal ? undefined : (type as string | undefined);
+			etag =
+				etag instanceof AbortSignal ? undefined : (etag as string | undefined);
 		}
 		if (!type && isMimeType(etag)) {
 			type = etag;
@@ -215,7 +237,7 @@ export class S3 {
 			etag = type;
 			type = undefined;
 		}
-		type = type ?? 'application/octet-stream' as string;
+		type = type ?? ('application/octet-stream' as string);
 		if ((content as any)[Symbol.asyncIterator]) {
 			return await this.#putStream(
 				resource,
@@ -253,8 +275,12 @@ export class S3 {
 		);
 		return JSON.parse(headers.get('etag') ?? '""') as string;
 	}
-	async del(resource: string, etag?: string | AbortSignal, signal?: AbortSignal) {
-		if (etag && (etag instanceof AbortSignal)) {
+	async del(
+		resource: string,
+		etag?: string | AbortSignal,
+		signal?: AbortSignal,
+	) {
+		if (etag && etag instanceof AbortSignal) {
 			if (signal instanceof AbortSignal) {
 				signal = AbortSignal.any([etag, signal]);
 			} else {
@@ -266,23 +292,24 @@ export class S3 {
 		if (etag) {
 			hdrs['If-Match'] = JSON.stringify(etag);
 		}
-		await this.#request('DELETE', this.#url(resource), hdrs, undefined, false, signal);
+		await this.#request(
+			'DELETE',
+			this.#url(resource),
+			hdrs,
+			undefined,
+			false,
+			signal,
+		);
 	}
 	async #list(
 		prefix?: string,
 		continuation?: string,
-		options?: ListOptions
+		signal?: AbortSignal,
 	): Promise<{
 		continuation?: string;
 		items: { name: string; size: number; etag: string; modified: number }[];
 	}> {
 		const url = this.#url('/');
-		if (options) {
-			for (const [key, val] of Object.entries(options)) {
-				if (key === 'signal') continue;
-				url.searchParams.set(key, `${val}`);
-			}
-		}
 		url.searchParams.set('list-type', '2');
 		if (continuation) {
 			url.searchParams.set('continuation-token', continuation);
@@ -292,7 +319,14 @@ export class S3 {
 			url.searchParams.set('prefix', prefix);
 		}
 
-		const { content } = (await this.#request('GET', url, {}, undefined, false, options?.signal)) as {
+		const { content } = (await this.#request(
+			'GET',
+			url,
+			{},
+			undefined,
+			false,
+			signal,
+		)) as {
 			headers: Headers;
 			content: Buffer;
 		};
@@ -321,7 +355,7 @@ export class S3 {
 			}),
 		};
 	}
-	async *list(prefix?: string, options?: ListOptions) {
+	async *list(prefix?: string, signal?: AbortSignal) {
 		prefix = prefix
 			?.split(/\/+/)
 			.flatMap((x) => ((x = x.trim()), x ? [x] : []))
@@ -331,12 +365,21 @@ export class S3 {
 		let continuation: string | undefined;
 		let items: { name: string; size: number; modified: number }[] = [];
 		do {
-			({ items, continuation } = await this.#list(prefix, continuation, options));
+			({ items, continuation } = await this.#list(
+				prefix,
+				continuation,
+				signal,
+			));
 			yield* items;
 		} while (continuation);
 	}
-	async copy(target: string, source: string, etag?: string | AbortSignal, signal?: AbortSignal) {
-		if (etag && (etag instanceof AbortSignal)) {
+	async copy(
+		target: string,
+		source: string,
+		etag?: string | AbortSignal,
+		signal?: AbortSignal,
+	) {
+		if (etag && etag instanceof AbortSignal) {
 			if (signal instanceof AbortSignal) {
 				signal = AbortSignal.any([etag, signal]);
 			} else {
@@ -353,7 +396,14 @@ export class S3 {
 		} else {
 			hdrs['If-None-Match'] = '*';
 		}
-		const { content } = await this.#request('PUT', this.#url(target), hdrs, undefined, false, signal);
+		const { content } = await this.#request(
+			'PUT',
+			this.#url(target),
+			hdrs,
+			undefined,
+			false,
+			signal,
+		);
 		if (!content) throw new Error('missing response');
 		const response = XML.xml2js(content.toString('utf-8'), {
 			compact: true,
@@ -367,7 +417,11 @@ export class S3 {
 		const newetag = response?.CopyObjectResult?.[0]?.ETag?.[0]?._text?.join('');
 		return JSON.parse(newetag ?? '""');
 	}
-	async #startMultipart(resource: string, headers: Partial<AWShdrs> = {}, signal?: AbortSignal) {
+	async #startMultipart(
+		resource: string,
+		headers: Partial<AWShdrs> = {},
+		signal?: AbortSignal,
+	) {
 		const url = this.#url(resource);
 		url.search = 'uploads';
 		const { content } = (await this.#request(
@@ -376,7 +430,7 @@ export class S3 {
 			headers,
 			Buffer.alloc(0),
 			false,
-			signal
+			signal,
 		)) as { content: Buffer };
 		if (!content?.length) {
 			throw new Error(`failed to start multi-part upload for ${resource}`);
@@ -400,12 +454,19 @@ export class S3 {
 		num: number,
 		content: Buffer,
 		hdrs: Partial<AWShdrs> = {},
-		signal?: AbortSignal
+		signal?: AbortSignal,
 	): Promise<UploadPart> {
 		const url = this.#url(resource);
 		url.searchParams.set('partNumber', `${num}`);
 		url.searchParams.set('uploadId', uploadId);
-		const { headers } = await this.#request('PUT', url, hdrs, content, false, signal);
+		const { headers } = await this.#request(
+			'PUT',
+			url,
+			hdrs,
+			content,
+			false,
+			signal,
+		);
 		return {
 			number: num,
 			etag: JSON.parse(headers.get('etag') ?? '""') as string,
@@ -416,7 +477,7 @@ export class S3 {
 		uploadId: string,
 		parts: Iterable<UploadPart>,
 		hdrs: Partial<AWShdrs> = {},
-		signal?: AbortSignal
+		signal?: AbortSignal,
 	) {
 		const url = this.#url(resource);
 		url.searchParams.set('uploadId', uploadId);
@@ -427,7 +488,7 @@ export class S3 {
 			{ ...hdrs, 'Content-Type': 'application/xml; charset=UTF-8' },
 			data,
 			false,
-			signal
+			signal,
 		);
 		if (!content) throw new Error('missing response');
 		const response = XML.xml2js(content.toString('utf-8'), {
@@ -443,10 +504,21 @@ export class S3 {
 			response?.CompleteMultipartUploadResult?.[0]?.ETag?.[0]?._text?.[0];
 		return etag;
 	}
-	async #abortMultipart(resource: string, uploadId: string, signal?: AbortSignal) {
+	async #abortMultipart(
+		resource: string,
+		uploadId: string,
+		signal?: AbortSignal,
+	) {
 		const url = this.#url(resource);
 		url.searchParams.set('uploadId', uploadId);
-		const { headers } = await this.#request('DELETE', url, {}, undefined, false, signal);
+		const { headers } = await this.#request(
+			'DELETE',
+			url,
+			{},
+			undefined,
+			false,
+			signal,
+		);
 		return headers;
 	}
 	async #putStream(
@@ -454,7 +526,7 @@ export class S3 {
 		content: AsyncIterable<Buffer>,
 		type: string,
 		etag?: string,
-		signal?: AbortSignal
+		signal?: AbortSignal,
 	): Promise<string> {
 		const hdrs: Record<string, string> = { 'Content-Type': type };
 		if (etag) {
@@ -473,7 +545,8 @@ export class S3 {
 				length += chunk.length;
 				if (length > MIN_CHUNK_SIZE) {
 					uploadId =
-						uploadId ?? ((await this.#startMultipart(name, hdrs, signal)) as string);
+						uploadId ??
+						((await this.#startMultipart(name, hdrs, signal)) as string);
 					const content = Buffer.concat(store.splice(0, store.length), length);
 					length = 0;
 					parts.push(
@@ -516,7 +589,13 @@ export class S3 {
 			throw err;
 		}
 		const data = Buffer.concat(store, length);
-		return await this.put(name, data, hdrs['Content-Type'], hdrs['If-Match'], signal);
+		return await this.put(
+			name,
+			data,
+			hdrs['Content-Type'],
+			hdrs['If-Match'],
+			signal,
+		);
 	}
 }
 export default S3;
