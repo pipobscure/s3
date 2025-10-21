@@ -26,7 +26,6 @@ describe('MultiPart', () => {
 	let etag: string | null;
 	after(async () => {
 		await tmpdir.remove();
-		if (s3) await s3.del(`${prefix}/${filename}`);
 	});
 	describe('large stream', () => {
 		before(async () => {
@@ -47,6 +46,9 @@ describe('MultiPart', () => {
 			}
 			await file.close();
 		});
+		after(async () => {
+			if (s3) await s3.del(`${prefix}/${filename}`);
+		});
 		test(s3)('put', async () => {
 			assertS3(s3);
 			const stream = FS.createReadStream(PT.join(tmpdir.path, 'blob.dat'));
@@ -61,6 +63,9 @@ describe('MultiPart', () => {
 		});
 	});
 	describe('small stream', () => {
+		after(async () => {
+			if (s3) await s3.del(`${prefix}/${filename}`);
+		});
 		test(s3)('put', async () => {
 			assertS3(s3);
 			const result = await s3.put(`${prefix}/${filename}`, smallData());
