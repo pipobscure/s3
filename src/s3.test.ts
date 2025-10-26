@@ -1,7 +1,7 @@
-import { describe, it, skip } from 'node:test';
 import assert from 'node:assert/strict';
-import * as FS from 'node:fs';
 import * as CR from 'node:crypto';
+import * as FS from 'node:fs';
+import { describe, it, skip } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import S3 from './s3.ts';
@@ -31,11 +31,7 @@ describe('S3 Tests', () => {
 		});
 		test(s3)('put(etag)', async () => {
 			assertS3(s3);
-			const result = await s3.put(
-				`${prefix}/${filename}`,
-				content,
-				etag ?? undefined,
-			);
+			const result = await s3.put(`${prefix}/${filename}`, content, etag ?? undefined);
 			assert.equal(result, etag);
 		});
 		test(s3)('get', async () => {
@@ -45,9 +41,7 @@ describe('S3 Tests', () => {
 		});
 		test(s3)('stream', async () => {
 			assertS3(s3);
-			const result = Buffer.concat(
-				await Array.fromAsync(s3.stream(`${prefix}/${filename}`)),
-			);
+			const result = Buffer.concat(await Array.fromAsync(s3.stream(`${prefix}/${filename}`)));
 			assert.equal(result?.toString('hex'), content.toString('hex'));
 		});
 
@@ -66,10 +60,7 @@ describe('S3 Tests', () => {
 		});
 		test(s3)('copy', async () => {
 			assertS3(s3);
-			const etag = await s3.copy(
-				`${prefix}/${filename}-2`,
-				`${prefix}/${filename}`,
-			);
+			const etag = await s3.copy(`${prefix}/${filename}-2`, `${prefix}/${filename}`);
 			assert(etag);
 			const headers = await s3.head(`${prefix}/${filename}-2`);
 			assert.equal(etag, headers.etag);

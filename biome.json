@@ -1,17 +1,8 @@
 {
-	"$schema": "https://biomejs.dev/schemas/2.2.6/schema.json",
-	"vcs": {
-		"enabled": false,
-		"clientKind": "git",
-		"useIgnoreFile": false
-	},
+	"$schema": "https://biomejs.dev/schemas/2.3.0/schema.json",
+	"extends": ["node_modules/@pipobscure/biome/biome.json"],
 	"files": {
-		"ignoreUnknown": false
-	},
-	"formatter": {
-		"enabled": true,
-		"indentStyle": "tab",
-		"lineEnding": "lf"
+		"includes": ["!dist/"]
 	},
 	"linter": {
 		"enabled": true,
@@ -23,25 +14,6 @@
 			"suspicious": {
 				"noExplicitAny": "off",
 				"noAssignInExpressions": "off"
-			}
-		}
-	},
-	"javascript": {
-		"formatter": {
-			"arrowParentheses": "always",
-			"bracketSameLine": false,
-			"bracketSpacing": true,
-			"quoteProperties": "asNeeded",
-			"semicolons": "always",
-			"trailingCommas": "all",
-			"quoteStyle": "single"
-		}
-	},
-	"assist": {
-		"enabled": true,
-		"actions": {
-			"source": {
-				"organizeImports": "on"
 			}
 		}
 	}

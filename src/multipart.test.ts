@@ -1,9 +1,9 @@
-import { describe, it, skip, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import * as FS from 'node:fs';
-import * as PT from 'node:path';
 import * as CR from 'node:crypto';
+import * as FS from 'node:fs';
 import * as OS from 'node:os';
+import * as PT from 'node:path';
+import { after, before, describe, it, skip } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import S3, { MIN_CHUNK_SIZE } from './s3.ts';
@@ -30,10 +30,7 @@ describe('MultiPart', () => {
 	describe('large stream', () => {
 		before(async () => {
 			let length = 0;
-			const file = await FS.promises.open(
-				PT.join(tmpdir.path, 'blob.dat'),
-				'w',
-			);
+			const file = await FS.promises.open(PT.join(tmpdir.path, 'blob.dat'), 'w');
 			while (length < MIN_CHUNK_SIZE * 3.5) {
 				const deferred = Promise.withResolvers<Buffer>();
 				CR.randomBytes(1024, (err, result) => {
