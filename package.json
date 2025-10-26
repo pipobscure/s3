@@ -18,7 +18,8 @@
 		"lint": "biome lint --write src/*.ts *.json",
 		"build": "tsc --build",
 		"watch": "tsc --watch",
-		"postversion": "git push --follow-tags"
+		"postversion": "git push --follow-tags",
+		"prepublishOnly": "npm run build"
 	},
 	"repository": {
 		"type": "git",
