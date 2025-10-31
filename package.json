@@ -30,7 +30,7 @@
 		"S3"
 	],
 	"contributors": [],
-	"license": "ISC",
+	"license": "EUPL-1.2",
 	"devDependencies": {
 		"@pipobscure/biome": "^1.1.2",
 		"@types/node": "~24.7.2",
